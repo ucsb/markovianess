@@ -4,6 +4,7 @@ import pathlib
 from datetime import datetime
 from baseline import run as run_baseline
 from noised import run_noised
+from dropped import run_dropped
 
 
 def setup(root_path: pathlib.Path, config_path: str):
@@ -53,6 +54,9 @@ def main(root_path: pathlib.Path):
 
         print(f"===== RUNNING NOISED FOR ENV={env_name} =====")
         run_noised(config_path=config_path, env_name=env_name, baseline_seed=baseline_seed)
+
+        print(f"===== RUNNING DROPPED FOR ENV={env_name} =====")
+        run_dropped(config_path, env_name, baseline_seed)
 
 
 if __name__ == '__main__':
