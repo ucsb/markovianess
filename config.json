@@ -1,0 +1,106 @@
+{
+  "environments": [
+    {
+      "name": "CartPole-v1",
+      "time_steps": 50000,
+      "n_envs": 1,
+      "observations": [
+        "var_cart_position",
+        "var_cart_velocity",
+        "var_pole_angle",
+        "var_pole_angular_velocity"
+      ],
+      "pcmci": {
+        "tau_max": 5,
+        "tau_min": 1,
+        "pc_alpha": 0.05,
+        "method": "parcorr",
+        "max_lags": 5,
+        "significance_level": 0.05,
+        "verbosity": 0,
+        "max_observations": 1000
+      },
+      "noise_strategies": {
+         "gaussian": [
+              {
+                  "mean": 0,
+                  "variance": 0.02
+              },
+              {
+                  "mean": 0,
+                  "variance": 0.05
+              }
+            ]
+      }
+    },
+    {
+      "name": "Pendulum-v1",
+      "time_steps": 20,
+      "n_envs": 1,
+      "observations": [
+        "var_cos(theta)",
+        "var_sin(theta)",
+        "var_angular_velocity"
+      ],
+      "pcmci": {
+        "tau_max": 5,
+        "tau_min": 1,
+        "pc_alpha": 0.05,
+        "method": "parcorr",
+        "max_lags": 5,
+        "significance_level": 0.05,
+        "verbosity": 0,
+        "max_observations": 1000
+      },
+      "noise_strategies": {
+        "gaussian": [
+              {
+                  "mean": 0,
+                  "variance": 0.02
+              },
+              {
+                  "mean": 0,
+                  "variance": 0.05
+              }
+            ]
+      }
+    },
+    {
+      "name": "MountainCarContinuous-v0",
+      "time_steps": 100,
+      "n_envs": 1,
+      "observations": [
+        "var_position",
+        "var_velocity"
+      ],
+      "pcmci": {
+            "tau_max": 5,
+            "tau_min": 1,
+            "pc_alpha": 0.05,
+            "method": "parcorr",
+            "max_lags": 5,
+            "significance_level": 0.05,
+            "verbosity": 0,
+            "max_observations": 1000
+        },
+      "noise_strategies": {
+            "gaussian": [
+                {
+                    "mean": 0,
+                    "variance": 0.02
+                },
+                {
+                    "mean": 0,
+                    "variance": 0.05
+                }
+            ]
+        }
+    }
+  ],
+  "noise_strategies": {
+    "gaussian": [
+      { "mean": 0, "variance": 0.02 },
+      { "mean": 0, "variance": 0.05 }
+    ]
+  }
+}
