@@ -49,10 +49,10 @@ def main(root_path: pathlib.Path):
     for env_item in config["environments"]:
         env_name = env_item["name"]
         print(f"\n===== RUNNING BASELINE FOR ENV={env_name} =====")
-        run_baseline(config_path=config_path, env_name=env_name)
+        baseline_seed = run_baseline(config_path=config_path, env_name=env_name)
 
         print(f"===== RUNNING NOISED FOR ENV={env_name} =====")
-        run_noised(config_path=config_path, env_name=env_name)
+        run_noised(config_path=config_path, env_name=env_name, baseline_seed=baseline_seed)
 
 
 if __name__ == '__main__':

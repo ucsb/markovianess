@@ -157,45 +157,40 @@ def plot_noised_learning_curves_all_dims(
     smooth_window: int = 10
 ):
     """
-    Creates a single figure for each noise variance, overlaying lines for each dimension
-    plus a baseline line if found in baseline_csv.
-
-    df_rewards columns:
-      [Environment, ObsDim, NoiseVariance, Episode, Reward]
-
-    We'll produce "<ENV>_var_<variance>_all_dims_overlaid.png" for each variance.
+    For each noise variance, produce one figure:
+      - multiple lines, one per (ObsDim, ObsName),
+      - plus black baseline if found.
     """
     os.makedirs(output_dir, exist_ok=True)
-
     if df_rewards.empty:
         logging.info("No noised data to plot.")
         return
 
-    env_name = df_rewards["Environment"].iloc[0]  # all rows same environment?
+    env_name = df_rewards["Environment"].iloc[0]
 
-    # Attempt to load baseline if CSV is specified
+    # Attempt to load baseline
     baseline_df = None
     if baseline_csv and os.path.isfile(baseline_csv):
         bdf = pd.read_csv(baseline_csv)
-        # Filter for rows matching env_name
         baseline_df = bdf[bdf["Environment"] == env_name]
         if baseline_df.empty:
             baseline_df = None
 
-    # Group the noised data by NoiseVariance => one figure per variance
+    # Group by noise variance
     for var_val, df_var in df_rewards.groupby("NoiseVariance"):
         plt.figure(figsize=(8, 5))
 
-        # Plot lines for each dimension of the noised RL runs
-        for dim_id, df_dim in df_var.groupby("ObsDim"):
+        # *** Changes below: group by (ObsDim, ObsName) so we have the dimension's name in the label
+        for (dim_id, obs_name), df_dim in df_var.groupby(["ObsDim", "ObsName"]):
             df_dim = df_dim.sort_values("Episode")
             episodes = df_dim["Episode"].values
             rewards = df_dim["Reward"].values
 
             x_smooth, y_smooth = _smooth_reward_curve(episodes, rewards, window=smooth_window)
-            plt.plot(x_smooth, y_smooth, label=f"Dim={dim_id}", linewidth=2)
+            # Use a custom label, e.g. "Dim=0(var_cart_position)"
+            label_str = f"Dim={dim_id}({obs_name})"
+            plt.plot(x_smooth, y_smooth, label=label_str, linewidth=2)
 
-        # If baseline data is present, overlay it as a black line
         if baseline_df is not None:
             baseline_sorted = baseline_df.sort_values("Episode")
             b_eps = baseline_sorted["Episode"].values
@@ -332,7 +327,7 @@ class NoisedExperiments:
         self.reward_records = []
         self.markov_records = []
 
-    def run(self, env_name=None):
+    def run(self, env_name=None, baseline_seed=None):
         """
         If `env_name` is provided, only run the pipeline for that environment.
         Otherwise, run for all environments in the config.
@@ -367,20 +362,21 @@ class NoisedExperiments:
             # For each dimension
             for dim_id in range(obs_dim):
                 # For each noise param
+                obs_dim_name = obs_names[dim_id]
                 for noise_params in noise_list:
                     mean = noise_params.get("mean", 0.0)
                     var = noise_params.get("variance", 0.01)
 
                     logging.info(f"[Noised] env={name}, dim_id={dim_id}, mean={mean}, var={var}")
-                    random_seed = random.randint(0, 99999)
 
                     # 1) Make environment with noise on dim_id
+                    used_seed = baseline_seed if baseline_seed is not None else random.randint(0, 100)
                     venv = make_noisy_env(
                         env_name=name,
                         dimension_to_noisify=dim_id,
                         mean=mean,
                         variance=var,
-                        seed=random_seed
+                        seed=used_seed
                     )
 
                     # 2) Train from scratch
@@ -395,6 +391,7 @@ class NoisedExperiments:
                         self.reward_records.append({
                             "Environment": name,
                             "ObsDim": dim_id,
+                            "ObsName": obs_dim_name,
                             "NoiseVariance": var,
                             "Episode": i + 1,
                             "Reward": rew
@@ -453,6 +450,7 @@ class NoisedExperiments:
                     self.markov_records.append({
                         "Environment": name,
                         "ObsDim": dim_id,
+                        "ObsName": obs_dim_name,
                         "NoiseVariance": var,
                         "MarkovScore": mk_score,
                         "MeanFinalReward": final_reward
@@ -491,7 +489,7 @@ class NoisedExperiments:
 ###############################################################################
 # run_noised (for calling from main.py), main() for direct CLI
 ###############################################################################
-def run_noised(config_path="config.json", env_name=None):
+def run_noised(config_path="config.json", env_name=None, baseline_seed=None):
     """
     We load config, create a NoisedExperiments, and run for a specific env_name (optional).
     The results are saved under results/<ENV>/noised, consistent with main.py logic.
@@ -507,7 +505,7 @@ def run_noised(config_path="config.json", env_name=None):
     runner = NoisedExperiments(config, root_path=root_path)
 
     start_t = time.perf_counter()
-    runner.run(env_name=env_name)
+    runner.run(env_name=env_name, baseline_seed=baseline_seed)
     end_t = time.perf_counter()
     logging.info(f"[Noised] Done! Total time: {(end_t - start_t):.2f}s")
 

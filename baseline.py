@@ -68,6 +68,7 @@ class BaselineExperiments:
         """
         self.environment = environment
         self.config = config
+        self.last_seed = None
 
         # Training parameters
         self.time_steps = self.config["time_steps"]
@@ -279,13 +280,13 @@ class BaselineExperiments:
         """
         Perform a single training run for the specified environment.
         """
-        random_seed = random.randint(0, 1000)
+        self.last_seed = random.randint(0, 1000)
         env_uid = str(uuid.uuid4())
 
-        logging.info(f"Creating environment: {self.environment}, UID: {env_uid}, Seed: {random_seed}")
+        logging.info(f"Creating environment: {self.environment}, UID: {env_uid}, Seed: {self.last_seed}")
 
         # Create environment
-        vec_env = make_vec_env(self.environment, n_envs=self.num_envs, seed=random_seed)
+        vec_env = make_vec_env(self.environment, n_envs=self.num_envs, seed=self.last_seed)
 
         # Initialize and train the RL model
         model = RPPO("MlpPolicy", vec_env, verbose=0, noise=None, learning_rate=3e-4)
@@ -303,7 +304,7 @@ class BaselineExperiments:
             results.append({
                 "Environment": self.environment,
                 "UID": env_uid,
-                "Seed": random_seed,
+                "Seed": self.last_seed,
                 "Episode": i,
                 "TotalReward": reward_val
             })
@@ -335,6 +336,8 @@ class BaselineExperiments:
 
         # 3) PCMCI with trained policy
         self.run_ci_tests(n_times=5, policy='trained', label='trained')
+
+        return self.last_seed
 
 
 def run(config_path="config.json", env_name=None):
