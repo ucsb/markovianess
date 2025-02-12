@@ -143,11 +143,23 @@ def plot_dropped_learning_curves_all_dims(
     smooth_window: int = 10
 ):
     """
-    For each dimension 'DroppedDim', produce a single figure showing that dimension's reward curve,
-    plus baseline if found.
-    The DataFrame has columns: [Environment, DroppedDim, Episode, Reward].
-    We'll create a file like "<ENV>_dropped_dim_<dim_id>_learning_curve.png".
+    Produces a single figure for the environment that overlays each dropped
+    dimension's learning curve on the same plot. Baseline is added in black
+    if found. This parallels the multi-line approach in noised.py.
+
+    The DataFrame should have columns:
+      ["Environment", "DroppedDim", "Episode", "Reward"]
+    If you'd like to store dimension names (e.g. "DroppedName"), you can add a
+    "DroppedName" column and update the legend labels accordingly.
+
+    The final plot is saved as:
+      "<ENV>_all_dropped_dims_overlaid.png"
+    in 'output_dir'.
     """
+    import os
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
     os.makedirs(output_dir, exist_ok=True)
     if df_rewards.empty:
         logging.info("[DroppedObs] No dropped data to plot.")
@@ -155,52 +167,57 @@ def plot_dropped_learning_curves_all_dims(
 
     env_name = df_rewards["Environment"].iloc[0]
 
-    # Attempt to load baseline
+    # Attempt to load baseline if provided
     baseline_df = None
     if baseline_csv and os.path.isfile(baseline_csv):
         bdf = pd.read_csv(baseline_csv)
+        # filter rows for just this environment
         bdf = bdf[bdf["Environment"] == env_name]
         if not bdf.empty:
             baseline_df = bdf
+        else:
+            baseline_df = None
 
-    dim_values = df_rewards["DroppedDim"].unique()
-    for dropped_dim in dim_values:
-        subset = df_rewards[df_rewards["DroppedDim"] == dropped_dim].sort_values("Episode")
-        if subset.empty:
-            continue
+    # We'll create a single figure showing *all* dropped dimensions
+    plt.figure(figsize=(8, 5))
 
-        episodes = subset["Episode"].values
-        reward_vals = subset["Reward"].values
+    # If you stored "DroppedName" you can also group by ["DroppedDim", "DroppedName"]
+    # For now, let's group only by DroppedDim
+    for dropped_dim_id, df_dim in df_rewards.groupby("DroppedDim"):
+        df_dim = df_dim.sort_values("Episode")
+        episodes = df_dim["Episode"].values
+        rewards = df_dim["Reward"].values
 
-        x_smooth, y_smooth = _smooth_reward_curve(episodes, reward_vals, window=smooth_window)
+        # Smooth the reward curve
+        x_smooth, y_smooth = _smooth_reward_curve(episodes, rewards, window=smooth_window)
 
-        plt.figure(figsize=(8,5))
-        plt.plot(x_smooth, y_smooth, color="blue", linewidth=2,
-                 label=f"Dropped Dim={dropped_dim}")
+        # Label: e.g. "Dropped Dim=0"
+        label_str = f"Dropped Dim={dropped_dim_id}"
+        plt.plot(x_smooth, y_smooth, linewidth=2, label=label_str)
 
-        if baseline_df is not None:
-            baseline_sorted = baseline_df.sort_values("Episode")
-            bx = baseline_sorted["Episode"].values
-            if "TotalReward" in baseline_sorted.columns:
-                by = baseline_sorted["TotalReward"].values
-            else:
-                # fallback if baseline uses "AverageReward"
-                by = baseline_sorted["AverageReward"].values
-            bx_smooth, by_smooth = _smooth_reward_curve(bx, by, window=smooth_window)
-            plt.plot(bx_smooth, by_smooth, color="black", linewidth=3, label="Baseline")
+    # Overlay baseline if found
+    if baseline_df is not None:
+        base_sorted = baseline_df.sort_values("Episode")
+        bx = base_sorted["Episode"].values
+        # baseline might have "TotalReward" or "AverageReward"
+        if "TotalReward" in base_sorted.columns:
+            by = base_sorted["TotalReward"].values
+        else:
+            by = base_sorted["AverageReward"].values
+        bx_smooth, by_smooth = _smooth_reward_curve(bx, by, window=smooth_window)
+        plt.plot(bx_smooth, by_smooth, color="black", linewidth=3, label="Baseline")
 
-        plt.title(f"{env_name} - Dropped Dim={dropped_dim}")
-        plt.xlabel("Episode")
-        plt.ylabel("Reward")
-        plt.legend()
-        plt.grid(True)
+    plt.title(f"{env_name}: All Dropped Dimensions (Overlaid)")
+    plt.xlabel("Episode")
+    plt.ylabel("Reward")
+    plt.legend()
+    plt.grid(True)
 
-        out_fname = f"{env_name}_dropped_dim_{dropped_dim}_learning_curve.png"
-        out_path = os.path.join(output_dir, out_fname)
-        plt.savefig(out_path, dpi=150)
-        plt.close()
-        logging.info(f"[DroppedObs] Dropped-dim plot saved => {out_path}")
-
+    out_fname = f"{env_name}_all_dropped_dims_overlaid.png"
+    out_path = os.path.join(output_dir, out_fname)
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    logging.info(f"[DroppedObs] Combined multi-dim dropped plot saved => {out_path}")
 
 ###############################################################################
 # DroppedObservationsExperiments
