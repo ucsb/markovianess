@@ -2,15 +2,13 @@
 """
 dropped.py
 
-Implements a pipeline for dropping one dimension of the observation instead of adding noise.
-Very similar to noised.py, except we use DropDimensionWrapper to remove a dimension.
-
+Implements a pipeline for dropping one dimension of the observation (DropDimensionWrapper).
 For each dimension:
  1) Remove that dimension from the observation
  2) Train a new RPPO model
- 3) Gather rollouts for PCMCI, store Markov scores
+ 3) Gather multiple rollouts for PCMCI (Fisher's method) => Markov scores
  4) Plot:
-    - Combined figure per dimension (lines for each dimension) vs baseline
+    - Combined figure per dimension vs. baseline
     - Rewards vs. dimension
     - Rewards vs. Markovian score
     - Etc.
@@ -28,9 +26,13 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from scipy.stats import chi2
 
 from rppo import RPPO
-from conditional_independence_test import ConditionalIndependenceTest, get_markov_violation_score
+from conditional_independence_test import (
+    ConditionalIndependenceTest,
+    get_markov_violation_score
+)
 
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
@@ -38,7 +40,11 @@ import gymnasium as gym
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - dropped: %(message)s"
+    format='%(asctime)s - %(levelname)s - dropped: %(message)s',
+    handlers=[
+        logging.FileHandler("logs.txt"),   # Writes logs to file
+        logging.StreamHandler()            # Writes logs to console (stdout)
+    ]
 )
 
 ###############################################################################
@@ -149,17 +155,7 @@ def plot_dropped_learning_curves_all_dims(
 
     The DataFrame should have columns:
       ["Environment", "DroppedDim", "Episode", "Reward"]
-    If you'd like to store dimension names (e.g. "DroppedName"), you can add a
-    "DroppedName" column and update the legend labels accordingly.
-
-    The final plot is saved as:
-      "<ENV>_all_dropped_dims_overlaid.png"
-    in 'output_dir'.
     """
-    import os
-    import pandas as pd
-    import matplotlib.pyplot as plt
-
     os.makedirs(output_dir, exist_ok=True)
     if df_rewards.empty:
         logging.info("[DroppedObs] No dropped data to plot.")
@@ -171,27 +167,19 @@ def plot_dropped_learning_curves_all_dims(
     baseline_df = None
     if baseline_csv and os.path.isfile(baseline_csv):
         bdf = pd.read_csv(baseline_csv)
-        # filter rows for just this environment
         bdf = bdf[bdf["Environment"] == env_name]
         if not bdf.empty:
             baseline_df = bdf
-        else:
-            baseline_df = None
 
-    # We'll create a single figure showing *all* dropped dimensions
     plt.figure(figsize=(8, 5))
 
-    # If you stored "DroppedName" you can also group by ["DroppedDim", "DroppedName"]
-    # For now, let's group only by DroppedDim
+    # Plot each dropped dimension
     for dropped_dim_id, df_dim in df_rewards.groupby("DroppedDim"):
         df_dim = df_dim.sort_values("Episode")
         episodes = df_dim["Episode"].values
         rewards = df_dim["Reward"].values
 
-        # Smooth the reward curve
         x_smooth, y_smooth = _smooth_reward_curve(episodes, rewards, window=smooth_window)
-
-        # Label: e.g. "Dropped Dim=0"
         label_str = f"Dropped Dim={dropped_dim_id}"
         plt.plot(x_smooth, y_smooth, linewidth=2, label=label_str)
 
@@ -199,11 +187,8 @@ def plot_dropped_learning_curves_all_dims(
     if baseline_df is not None:
         base_sorted = baseline_df.sort_values("Episode")
         bx = base_sorted["Episode"].values
-        # baseline might have "TotalReward" or "AverageReward"
-        if "TotalReward" in base_sorted.columns:
-            by = base_sorted["TotalReward"].values
-        else:
-            by = base_sorted["AverageReward"].values
+        # typical baseline column might be "TotalReward"
+        by = base_sorted["TotalReward"].values
         bx_smooth, by_smooth = _smooth_reward_curve(bx, by, window=smooth_window)
         plt.plot(bx_smooth, by_smooth, color="black", linewidth=3, label="Baseline")
 
@@ -220,7 +205,7 @@ def plot_dropped_learning_curves_all_dims(
     logging.info(f"[DroppedObs] Combined multi-dim dropped plot saved => {out_path}")
 
 ###############################################################################
-# DroppedObservationsExperiments
+# Multi-run PCMCI with Fisher's method
 ###############################################################################
 class DroppedObservationsExperiments:
     def __init__(self, config, root_path="."):
@@ -233,12 +218,99 @@ class DroppedObservationsExperiments:
         self.reward_records = []
         self.markov_records = []
 
+    def fishers_method(self, pvals, epsilon=1e-15):
+        """
+        Combine multiple p-values using Fisher's method (like noised.py).
+        """
+        pvals = np.array(pvals, dtype=float)
+        pvals = np.clip(pvals, epsilon, 1 - epsilon)
+        statistic = -2.0 * np.sum(np.log(pvals))
+        df = 2 * len(pvals)
+        return 1.0 - chi2.cdf(statistic, df)
+
+    def gather_and_run_pcmci(self, model, env_name, drop_dim_index, steps=2000, seed=None):
+        """
+        Creates a dropped-dim environment, collects `steps` observations using `model`,
+        then runs PCMCI and returns (val_matrix, p_matrix).
+        """
+        test_env = make_dropped_env(env_name, drop_dim_index=drop_dim_index, seed=seed)
+
+        obs = test_env.reset()
+        obs_list = []
+        for _ in range(steps):
+            action, _ = model.predict(obs, deterministic=True)
+            output = test_env.step(action)
+            if len(output) == 5:
+                obs, reward, done, truncated, info = output
+            else:
+                obs, reward, done, info = output
+                truncated = done
+            obs_list.append(obs[0])  # shape = (1, obs_dim-1)
+            if done[0] or truncated[0]:
+                obs = test_env.reset()
+        test_env.close()
+
+        obs_array = np.array(obs_list)
+
+        # Run PCMCI
+        cit = ConditionalIndependenceTest()
+        results_dict = cit.run_pcmci(
+            observations=obs_array,
+            tau_min=1,
+            tau_max=2,
+            alpha_level=0.05,
+            pc_alpha=None,
+            env_id=env_name,
+            label=f"dropped_dim_{drop_dim_index}_seed_{seed}",
+            results_dir=os.path.join(self.root_path, "results", env_name, "dropped", "pcmci")
+        )
+        return results_dict["val_matrix"], results_dict["p_matrix"]
+
+    def run_multiple_pcmci_fisher(
+        self, model, env_name, drop_dim_index, num_runs=5, steps=2000
+    ):
+        """
+        Collect multiple rollouts (num_runs) for PCMCI, combine p-values via Fisher
+        and average the val_matrix. Return the Markov violation score.
+        """
+        val_list = []
+        p_list = []
+        for _ in range(num_runs):
+            seed = random.randint(0, 9999)
+            val_m, p_m = self.gather_and_run_pcmci(
+                model, env_name, drop_dim_index,
+                steps=steps, seed=seed
+            )
+            val_list.append(val_m)
+            p_list.append(p_m)
+
+        val_arr = np.stack(val_list, axis=0)  # shape=(num_runs, N, N, L)
+        p_arr   = np.stack(p_list, axis=0)   # shape=(num_runs, N, N, L)
+
+        avg_val_matrix = np.mean(val_arr, axis=0)
+
+        n_runs, N, _, L = p_arr.shape
+        combined_p_matrix = np.zeros((N, N, L), dtype=float)
+        for i in range(N):
+            for j in range(N):
+                for k in range(L):
+                    pvals_for_link = p_arr[:, i, j, k]
+                    combined_p_matrix[i, j, k] = self.fishers_method(pvals_for_link)
+
+        # Compute Markov violation
+        mk_score = get_markov_violation_score(
+            p_matrix=combined_p_matrix,
+            val_matrix=avg_val_matrix,
+            alpha_level=0.05
+        )
+        return mk_score
+
     def run(self, env_name=None, baseline_seed=None):
         """
         If env_name is provided, run only for that environment.
         Otherwise, run for all in the config.
 
-        The training results and Markov analysis are saved in results/<ENV>/dropped.
+        The results + Markov analysis are saved in results/<ENV>/dropped.
         """
         envs = self.config["environments"]
         if env_name:
@@ -263,12 +335,12 @@ class DroppedObservationsExperiments:
 
             logging.info(f"[DroppedObs] Start environment: {name}, obs_dim_count={obs_dim_count}")
 
-            # For each dimension we want to drop
+            # For each dimension to drop
             for dim_id in range(obs_dim_count):
                 used_seed = baseline_seed if baseline_seed is not None else random.randint(0, 9999)
                 logging.info(f"[DroppedObs] -> Dropping dimension {dim_id}, seed={used_seed}")
 
-                # 1) Make environment missing that dimension
+                # 1) Make environment without that dimension
                 venv = make_dropped_env(name, drop_dim_index=dim_id, seed=used_seed)
 
                 # 2) Train RL
@@ -278,7 +350,7 @@ class DroppedObservationsExperiments:
                 ep_rewards = callback.get_rewards()
                 venv.close()
 
-                # Store full reward curve
+                # Store reward curve
                 for i, rew_val in enumerate(ep_rewards):
                     self.reward_records.append({
                         "Environment": name,
@@ -287,47 +359,18 @@ class DroppedObservationsExperiments:
                         "Reward": rew_val
                     })
 
-                # 3) Gather obs for PCMCI
-                test_env = make_dropped_env(name, drop_dim_index=dim_id, seed=42)
-                obs = test_env.reset()
-                obs_list = []
-                steps_to_collect = 2000
-                for _ in range(steps_to_collect):
-                    action, _ = model.predict(obs, deterministic=True)
-                    output = test_env.step(action)
-                    if len(output) == 5:
-                        obs, reward, done, truncated, info = output
-                    else:
-                        obs, reward, done, info = output
-                        truncated = done
-                    obs_list.append(obs[0])  # shape=(1, obs_dim-1)
-                    if done[0] or truncated[0]:
-                        obs = test_env.reset()
-                test_env.close()
-
-                obs_array = np.array(obs_list)
-
-                # 4) Run PCMCI
-                cit = ConditionalIndependenceTest()  # same test used in noised
-                results_dict = cit.run_pcmci(
-                    observations=obs_array,
-                    tau_min=1,
-                    tau_max=2,
-                    alpha_level=0.05,
-                    pc_alpha=None,
-                    env_id=name,
-                    label=f"dropped_dim_{dim_id}",
-                    results_dir=pcmci_path
+                # 3) MULTIPLE PCMCI runs => Fisher
+                NUM_PCMCI_RUNS = 15  # or 10, etc.
+                mk_score = self.run_multiple_pcmci_fisher(
+                    model=model,
+                    env_name=name,
+                    drop_dim_index=dim_id,
+                    num_runs=NUM_PCMCI_RUNS,
+                    steps=2000
                 )
-                val_matrix = results_dict["val_matrix"]
-                p_matrix = results_dict["p_matrix"]
-                mk_score = get_markov_violation_score(
-                    p_matrix=p_matrix,
-                    val_matrix=val_matrix,
-                    alpha_level=0.05
-                )
-                logging.info(f"[DroppedObs] Markov Score => {mk_score:.4f}")
+                logging.info(f"[DroppedObs] Markov Score => {mk_score:.4f} (Fisher from {NUM_PCMCI_RUNS} runs)")
 
+                # 4) Final metrics
                 final_rew = np.mean(ep_rewards[-10:]) if len(ep_rewards) > 10 else np.mean(ep_rewards)
                 self.markov_records.append({
                     "Environment": name,
@@ -336,7 +379,7 @@ class DroppedObservationsExperiments:
                     "MeanFinalReward": final_rew
                 })
 
-            # done dropping each dimension => save CSV & produce plots
+            # Done dropping each dimension => Save CSV & produce plots
             env_rewards = [r for r in self.reward_records if r["Environment"] == name]
             env_markov = [m for m in self.markov_records if m["Environment"] == name]
 
@@ -359,13 +402,14 @@ class DroppedObservationsExperiments:
                 output_dir=dropped_path,
                 smooth_window=10
             )
-            # If you want additional "dimension vs. Markov" or "dimension vs. final reward" plots,
-            # you can replicate the noised approach.
+            # You can add further dimension vs. Markov plots if desired.
 
+###############################################################################
+# Main entry points
+###############################################################################
 def run_dropped(config_path="config.json", env_name=None, baseline_seed=None):
     """
-    Similar to run_noised.
-    We reuse the baseline_seed if given, to ensure environment initialization is consistent with baseline.
+    We reuse the baseline_seed if given, to ensure environment initialization is consistent.
     """
     if not os.path.exists(config_path):
         logging.error(f"Config file '{config_path}' not found.")

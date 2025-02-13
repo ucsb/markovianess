@@ -19,23 +19,11 @@
         "significance_level": 0.05,
         "verbosity": 0,
         "max_observations": 1000
-      },
-      "noise_strategies": {
-         "gaussian": [
-              {
-                  "mean": 0,
-                  "variance": 0.02
-              },
-              {
-                  "mean": 0,
-                  "variance": 0.05
-              }
-            ]
       }
     },
     {
       "name": "Pendulum-v1",
-      "time_steps": 20,
+      "time_steps": 250000,
       "n_envs": 1,
       "observations": [
         "var_cos(theta)",
@@ -51,56 +39,99 @@
         "significance_level": 0.05,
         "verbosity": 0,
         "max_observations": 1000
-      },
-      "noise_strategies": {
-        "gaussian": [
-              {
-                  "mean": 0,
-                  "variance": 0.02
-              },
-              {
-                  "mean": 0,
-                  "variance": 0.05
-              }
-            ]
       }
     },
     {
-      "name": "MountainCarContinuous-v0",
-      "time_steps": 100,
+      "name": "Acrobot-v1",
+      "time_steps": 50000,
       "n_envs": 1,
       "observations": [
-        "var_position",
-        "var_velocity"
+        "var_cos(theta1)",
+        "var_sin(theta1)",
+        "var_cos(theta2)",
+        "var_sin(theta2)",
+        "var_angular_velocity1",
+        "var_angular_velocity2"
       ],
       "pcmci": {
-            "tau_max": 5,
-            "tau_min": 1,
-            "pc_alpha": 0.05,
-            "method": "parcorr",
-            "max_lags": 5,
-            "significance_level": 0.05,
-            "verbosity": 0,
-            "max_observations": 1000
-        },
-      "noise_strategies": {
-            "gaussian": [
-                {
-                    "mean": 0,
-                    "variance": 0.02
-                },
-                {
-                    "mean": 0,
-                    "variance": 0.05
-                }
-            ]
-        }
+        "tau_max": 5,
+        "tau_min": 1,
+        "pc_alpha": 0.05,
+        "method": "parcorr",
+        "max_lags": 5,
+        "significance_level": 0.05,
+        "verbosity": 0,
+        "max_observations": 1000
+      }
     }
   ],
   "noise_strategies": {
     "gaussian": [
-      { "mean": 0, "variance": 0.02 },
-      { "mean": 0, "variance": 0.05 }
+      { "mean": 0, "variance": 0.10 },
+      { "mean": 0, "variance": 0.80 },
+      { "mean": 0, "variance": 1.00 },
+      { "mean": 0, "variance": 2.00 },
+      { "mean": 0, "variance": 3.00 },
+      { "mean": 0, "variance": 5.00 },
+      { "mean": 0, "variance": 8.00 },
+      { "mean": 0, "variance": 10.00 },
+      { "mean": 0, "variance": 12.00 },
+      { "mean": 0, "variance": 15.00 }
+    ],
+    "auto_regressive": [
+      {
+        "type": "ar1",
+        "phi": 0.4,
+        "variance": 0.1,
+        "description": "AR(1) noise with phi=0.4, base variance=0.10"
+      },
+      {
+        "type": "ar1",
+        "phi": 0.4,
+        "variance": 0.5,
+        "description": "AR(1) noise with phi=0.4, base variance=0.20"
+      },
+      {
+        "type": "ar1",
+        "phi": 0.4,
+        "variance": 1.0,
+        "description": "AR(1) noise with phi=0.4, base variance=0.30"
+      },
+      {
+        "type": "ar1",
+        "phi": 0.4,
+        "variance": 3.0,
+        "description": "AR(1) noise with phi=0.4, base variance=0.40"
+      },
+      {
+        "type": "ar1",
+        "phi": 0.4,
+        "variance": 5.0,
+        "description": "AR(1) noise with phi=0.4, base variance=0.50"
+      }
+    ],
+    "cyclical": [
+      {
+        "type": "cyclical",
+        "base_variance": 0.10,
+        "amplitude": 0.5,
+        "frequency": 0.005,
+        "description": "Sinusoidal modulation of noise variance around 0.10, amplitude=0.5, freq=0.005"
+      },
+      {
+        "type": "cyclical",
+        "base_variance": 0.50,
+        "amplitude": 1.0,
+        "frequency": 0.01,
+        "description": "Stronger sinusoidal modulation with base variance=0.50, amplitude=1.0, freq=0.01"
+      },
+      {
+        "type": "cyclical",
+        "base_variance": 0.50,
+        "amplitude": 1.0,
+        "frequency": 0.05,
+        "description": "Stronger sinusoidal modulation with base variance=0.50, amplitude=1.0, freq=0.01"
+      }
     ]
   }
 }

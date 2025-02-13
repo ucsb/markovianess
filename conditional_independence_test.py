@@ -32,11 +32,14 @@ def get_markov_violation_score(p_matrix, val_matrix, alpha_level=0.05):
         return 0.0
 
     raw_sum = 0.0
+    # clip to avoid log(0)
+    clip = 1e-15
+    p_clipped = np.clip(p_matrix, clip, 1.0)
     for i in range(N):
         for j in range(N):
             for k in range(2, lag_count):  # lags 2..tau_max
-                if p_matrix[i, j, k] <= alpha_level:
-                    raw_sum += abs(val_matrix[i, j, k]) * -np.log(p_matrix[i, j, k])
+                if p_clipped[i, j, k] <= alpha_level:
+                    raw_sum += abs(val_matrix[i, j, k]) * -np.log(p_clipped[i, j, k])
 
     denom = (N**2) * (tau_max - 1)
     if denom == 0:
@@ -60,7 +63,7 @@ class ConditionalIndependenceTest:
         self,
         observations: np.ndarray,
         tau_min: int = 0,
-        tau_max: int = 5,
+        tau_max: int = 15,
         alpha_level: float = 0.05,
         pc_alpha = None,
         env_id: str = None,
