@@ -1,53 +1,54 @@
-#!/usr/bin/env python
+# File: markovianess/experiments/noised_gaussian.py
 """
-noised.py
+noised_gaussian.py
+------------------
+Runs experiments by adding Gaussian noise to one observation dimension
+at a time. Trains a PPO agent for each noise level, then performs PCMCI
+to measure Markov violation.
 
-Implements a complete pipeline:
-1) Noise injection logic (Gaussian) on a specific observation dimension
-2) Train an RPPO model from scratch with that noise
-3) Compare learning curves vs. baseline
-4) Run PCMCI for each dimension, store Markovian score
-5) Plot:
-   - One combined figure per noise variance (lines for each dimension) vs. baseline
-   - Rewards vs. Noise
-   - Rewards vs. Markovian score
-   - Correlation between Markov Score & noise
+Overview of Steps
+-----------------
+1. For each dimension in the observation space, create a gym wrapper that injects
+   Gaussian noise into that dimension at every step.
+2. Train a PPO agent on this "noised" environment, record episode rewards.
+3. Optionally run multiple PCMCI analyses with different rollouts, combining results
+   (partial correlations + p-values) via averaging + Fisher's method.
+4. Collect Markov violation scores and store them in CSV. Produce any relevant plots.
 
-Saves outputs into the same "results" subfolders as main.py for each environment.
+Usage
+-----
+Call the main function `run_noised_gaussian(config_path, env_name, baseline_seed)`
+or run from the command line (see `main()` below).
 """
 
-import os
-import json
-import time
-import random
 import argparse
-import logging
+import json
+import os
+import random
+import time
+
+import gymnasium as gym
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import glob
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# Our custom PPO logic (with partial noise support)
-from rppo import RPPO
-# PCMCI + Markovian score logic
-from conditional_independence_test import ConditionalIndependenceTest, get_markov_violation_score
-
+from scipy.stats import chi2
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
-import gymnasium as gym
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - noised: %(message)s"
+# From our own package:
+from markovianess.ci.conditional_independence_test import (
+    ConditionalIndependenceTest,
+    get_markov_violation_score
 )
+# If you have a custom logger in utils, you can import it. Otherwise, we use standard logging:
+import logging
+logging.basicConfig(level=logging.INFO)
 
-###############################################################################
-# Basic callback to track episode rewards
-###############################################################################
+
 class RewardTrackingCallback(BaseCallback):
     """
-    Tracks the total reward per episode for a single-environment scenario.
+    Callback that records total reward per episode in a single-env scenario.
     """
     def __init__(self):
         super().__init__()
@@ -67,13 +68,10 @@ class RewardTrackingCallback(BaseCallback):
         return self.episode_rewards
 
 
-###############################################################################
-# Wrapper to inject noise into a single dimension of the observation
-###############################################################################
-class NoisyObservationWrapper(gym.Wrapper):
+class NoisyGaussianObservationWrapper(gym.Wrapper):
     """
-    Gym wrapper that adds Gaussian noise to a single dimension of the observation.
-    dimension_to_noisify = None => apply to all dims
+    Injects Gaussian noise into a single dimension of the observation.
+    If dimension_to_noisify is None, it applies noise to *all* dimensions.
     """
     def __init__(self, env, dimension_to_noisify=None, mean=0.0, variance=0.01):
         super().__init__(env)
@@ -87,14 +85,13 @@ class NoisyObservationWrapper(gym.Wrapper):
         return obs, info
 
     def step(self, action):
-        # Gymnasium returns 5 items: (obs, reward, done, truncated, info)
-        # Older Gym returns 4 items: (obs, reward, done, info)
-        output = self.env.step(action)
-        if len(output) == 5:
-            obs, reward, done, truncated, info = output
+        # In Gymnasium v0.26+, step returns 5 items (obs, reward, terminated, truncated, info)
+        result = self.env.step(action)
+        if len(result) == 5:
+            obs, reward, done, truncated, info = result
         else:
-            obs, reward, done, info = output
-            truncated = done  # or False if you prefer
+            obs, reward, done, info = result
+            truncated = done  # older gym fallback
 
         # Inject noise
         if self.dim_to_noisify is None:
@@ -116,30 +113,26 @@ def make_noisy_env(
     seed=None
 ):
     """
-    Creates a vectorized environment that wraps a single environment with NoisyObservationWrapper.
+    Creates a vectorized environment that adds Gaussian noise to one dimension
+    of the observation. If dimension_to_noisify is None, apply noise to all dims.
     """
     def _env_fn():
         e = gym.make(env_name)
         if seed is not None:
             e.reset(seed=seed)
-        e = NoisyObservationWrapper(
+        return NoisyGaussianObservationWrapper(
             e,
             dimension_to_noisify=dimension_to_noisify,
             mean=mean,
             variance=variance
         )
-        return e
 
-    venv = make_vec_env(_env_fn, n_envs=1, seed=seed)
-    return venv
+    return make_vec_env(_env_fn, n_envs=1, seed=seed)
 
 
-###############################################################################
-# Utility: rolling average for smoothing
-###############################################################################
 def _smooth_reward_curve(episodes, rewards, window=10):
     """
-    Returns a rolling mean of the rewards. If <window points, just returns raw data.
+    Returns a rolling-mean smoothing of the reward data.
     """
     if len(rewards) < window:
         return episodes, rewards
@@ -147,9 +140,7 @@ def _smooth_reward_curve(episodes, rewards, window=10):
     smoothed = (cumsum[window:] - cumsum[:-window]) / float(window)
     return episodes[window - 1:], smoothed
 
-###############################################################################
-# 1. Single plot for each variance (lines for each dimension) + baseline
-###############################################################################
+
 def plot_noised_learning_curves_all_dims(
     df_rewards: pd.DataFrame,
     baseline_csv: str = None,
@@ -157,13 +148,13 @@ def plot_noised_learning_curves_all_dims(
     smooth_window: int = 10
 ):
     """
-    For each noise variance, produce one figure:
-      - multiple lines, one per (ObsDim, ObsName),
-      - plus black baseline if found.
+    For each noise variance, produce one figure with multiple lines:
+    - one line per (dimension, obs_name)
+    - optionally overlay baseline if found
     """
     os.makedirs(output_dir, exist_ok=True)
     if df_rewards.empty:
-        logging.info("No noised data to plot.")
+        logging.info("[Noised Gaussian] No data to plot.")
         return
 
     env_name = df_rewards["Environment"].iloc[0]
@@ -172,25 +163,24 @@ def plot_noised_learning_curves_all_dims(
     baseline_df = None
     if baseline_csv and os.path.isfile(baseline_csv):
         bdf = pd.read_csv(baseline_csv)
-        baseline_df = bdf[bdf["Environment"] == env_name]
-        if baseline_df.empty:
-            baseline_df = None
+        bdf = bdf[bdf["Environment"] == env_name]
+        if not bdf.empty:
+            baseline_df = bdf
 
     # Group by noise variance
     for var_val, df_var in df_rewards.groupby("NoiseVariance"):
         plt.figure(figsize=(8, 5))
 
-        # *** Changes below: group by (ObsDim, ObsName) so we have the dimension's name in the label
+        # Group by dimension => label lines with dimension & name
         for (dim_id, obs_name), df_dim in df_var.groupby(["ObsDim", "ObsName"]):
             df_dim = df_dim.sort_values("Episode")
             episodes = df_dim["Episode"].values
             rewards = df_dim["Reward"].values
-
             x_smooth, y_smooth = _smooth_reward_curve(episodes, rewards, window=smooth_window)
-            # Use a custom label, e.g. "Dim=0(var_cart_position)"
             label_str = f"Dim={dim_id}({obs_name})"
             plt.plot(x_smooth, y_smooth, label=label_str, linewidth=2)
 
+        # Overlay baseline if available
         if baseline_df is not None:
             baseline_sorted = baseline_df.sort_values("Episode")
             b_eps = baseline_sorted["Episode"].values
@@ -208,17 +198,17 @@ def plot_noised_learning_curves_all_dims(
         out_path = os.path.join(output_dir, out_fname)
         plt.savefig(out_path, dpi=150)
         plt.close()
-        logging.info(f"Noised multi-dim plot (plus baseline) saved to: {out_path}")
+        logging.info(f"[Noised Gaussian] Saved noised multi-dim plot => {out_path}")
 
-###############################################################################
-# 2. Other plots remain the same: Rewards vs. Noise, Rewards vs. Markov, Noise vs. Markov Corr
-###############################################################################
+
 def plot_rewards_vs_noise(df_markov, output_dir="."):
     """
-    Single plot per environment, X-axis=NoiseVariance, Y-axis=MeanFinalReward.
-    Lines for each dimension.
+    Creates a plot: X-axis=NoiseVariance, Y-axis=MeanFinalReward. A line per dimension.
     """
     os.makedirs(output_dir, exist_ok=True)
+    if df_markov.empty:
+        return
+
     envs = df_markov["Environment"].unique()
     for env_name in envs:
         env_df = df_markov[df_markov["Environment"] == env_name]
@@ -246,10 +236,12 @@ def plot_rewards_vs_noise(df_markov, output_dir="."):
 
 def plot_rewards_vs_markov(df_markov, output_dir="."):
     """
-    Single plot per environment, X-axis=MarkovScore, Y-axis=MeanFinalReward.
-    Lines for each dimension.
+    Plot: X-axis=MarkovScore, Y-axis=MeanFinalReward. A line per dimension.
     """
     os.makedirs(output_dir, exist_ok=True)
+    if df_markov.empty:
+        return
+
     envs = df_markov["Environment"].unique()
     for env_name in envs:
         env_df = df_markov[df_markov["Environment"] == env_name]
@@ -265,7 +257,7 @@ def plot_rewards_vs_markov(df_markov, output_dir="."):
                 marker="o",
                 label=f"dim={dim_id}"
             )
-        ax.set_title(f"Rewards vs Markovian Score - {env_name}")
+        ax.set_title(f"Rewards vs MarkovScore - {env_name}")
         ax.set_xlabel("MarkovScore")
         ax.set_ylabel("MeanFinalReward")
         ax.legend()
@@ -277,10 +269,13 @@ def plot_rewards_vs_markov(df_markov, output_dir="."):
 
 def plot_noise_vs_markov_corr(df_markov, output_dir="."):
     """
-    Single plot per environment, X-axis=NoiseVariance, Y-axis=MarkovScore, one dimension per line.
-    Also compute correlation.
+    Plot: X-axis=NoiseVariance, Y-axis=MarkovScore, with lines for each dimension.
+    Also compute correlation across all points if you wish.
     """
     os.makedirs(output_dir, exist_ok=True)
+    if df_markov.empty:
+        return
+
     envs = df_markov["Environment"].unique()
     for env_name in envs:
         env_df = df_markov[df_markov["Environment"] == env_name]
@@ -296,11 +291,13 @@ def plot_noise_vs_markov_corr(df_markov, output_dir="."):
                 marker="o",
                 label=f"dim={dim_id}"
             )
+
         if len(env_df) >= 2:
             corr_all = env_df[["NoiseVariance","MarkovScore"]].corr().iloc[0,1]
         else:
             corr_all = float('nan')
-        ax.set_title(f"{env_name} - Noise vs Markov Score (corr={corr_all:.2f})")
+
+        ax.set_title(f"{env_name} - Noise vs MarkovScore (corr={corr_all:.2f})")
         ax.set_xlabel("NoiseVariance")
         ax.set_ylabel("MarkovScore")
         ax.legend()
@@ -310,38 +307,139 @@ def plot_noise_vs_markov_corr(df_markov, output_dir="."):
         plt.close(fig)
 
 
-###############################################################################
-# NoisedExperiments
-###############################################################################
-class NoisedExperiments:
+class NoisedGaussianExperiments:
+    """
+    Class for systematically injecting Gaussian noise in each observation dimension,
+    training a PPO model, and measuring Markov violation using PCMCI.
+
+    Steps:
+    ------
+    1. For each dimension 'dim_id':
+        a) For each noise param (mean, variance), create a "noised" environment.
+        b) Train PPO => record reward per episode.
+        c) Gather multiple rollouts with the trained model => run PCMCI => combine
+           partial correlations & p-values => get Markov Score.
+    2. Save final metrics to CSV, produce plots, etc.
+
+    `run()` method orchestrates the above.
+    """
     def __init__(self, config, root_path="."):
         """
-        config must contain:
-         - "environments": [ { "name":..., "time_steps":..., "n_envs":..., "observations": [...] }, ... ]
-         - "noise_strategies": { "gaussian": [ { "mean":0, "variance":0.01 }, ... ] }
-
-        root_path: the root directory from main.py (where 'results' folder is).
+        config : Dict loaded from config.json, must contain a "noise_strategies" dict
+                 with "gaussian" info, e.g. { "gaussian": [ { "mean":0.0, "variance":0.01 }, ... ] }
+        root_path : Base directory path where results/<ENV> will be created.
         """
         self.config = config
+        self.learning_rate = self.config.get("learning_rate", 3e-4)
         self.root_path = root_path
         self.reward_records = []
         self.markov_records = []
 
+    def fishers_method(self, pvals, epsilon=1e-15):
+        """
+        Combine p-values via Fisher's method.
+        """
+        pvals = np.array(pvals, dtype=float)
+        pvals = np.clip(pvals, epsilon, 1 - epsilon)
+        statistic = -2.0 * np.sum(np.log(pvals))
+        df = 2 * len(pvals)
+        return 1.0 - chi2.cdf(statistic, df)
+
+    def gather_and_run_pcmci(self, model, env_name, dim_id, mean, variance, steps=2000, seed=None):
+        """
+        Creates a noised environment, collects steps with the given model,
+        then runs PCMCI and returns (val_matrix, p_matrix).
+        """
+        test_env = make_noisy_env(
+            env_name=env_name,
+            dimension_to_noisify=dim_id,
+            mean=mean,
+            variance=variance,
+            seed=seed
+        )
+
+        obs = test_env.reset()
+        obs_list = []
+        for _ in range(steps):
+            action, _ = model.predict(obs, deterministic=True)
+            result = test_env.step(action)
+            if len(result) == 5:
+                obs, reward, done, truncated, info = result
+            else:
+                obs, reward, done, info = result
+                truncated = done
+            obs_list.append(obs[0])
+            if done[0] or truncated[0]:
+                obs = test_env.reset()
+        test_env.close()
+
+        obs_array = np.array(obs_list)
+
+        # Now run PCMCI
+        cit = ConditionalIndependenceTest()
+        results_dict = cit.run_pcmci(
+            observations=obs_array,
+            tau_max=5,
+            alpha_level=0.05
+        )
+        return results_dict["val_matrix"], results_dict["p_matrix"]
+
+    def run_multiple_pcmci_fisher(
+        self, model, env_name, dim_id, mean, variance,
+        num_runs=5, steps=2000
+    ):
+        """
+        Perform multiple rollouts for PCMCI analysis, combine partial-corr & p-values.
+        Return (avg_val_matrix, combined_p_matrix, markov_score).
+        """
+        val_list = []
+        p_list = []
+        for _ in range(num_runs):
+            seed = random.randint(0, 9999)
+            val_m, p_m = self.gather_and_run_pcmci(
+                model, env_name, dim_id, mean, variance,
+                steps=steps, seed=seed
+            )
+            val_list.append(val_m)
+            p_list.append(p_m)
+
+        val_arr = np.stack(val_list, axis=0)
+        p_arr = np.stack(p_list, axis=0)
+
+        avg_val_matrix = np.mean(val_arr, axis=0)
+
+        n_runs, N, _, L = p_arr.shape
+        combined_p_matrix = np.zeros((N, N, L), dtype=float)
+
+        for i in range(N):
+            for j in range(N):
+                for k in range(L):
+                    pvals_for_link = p_arr[:, i, j, k]
+                    combined_p_matrix[i, j, k] = self.fishers_method(pvals_for_link)
+
+        mk_score = get_markov_violation_score(
+            p_matrix=combined_p_matrix,
+            val_matrix=avg_val_matrix,
+            alpha_level=0.05
+        )
+        return avg_val_matrix, combined_p_matrix, mk_score
+
     def run(self, env_name=None, baseline_seed=None):
         """
-        If `env_name` is provided, only run the pipeline for that environment.
-        Otherwise, run for all environments in the config.
+        Main pipeline:
+          - For each environment in config (or a chosen env_name),
+          - For each dimension, for each noise param (mean,var),
+            train PPO => gather PCMCI => record Markov score.
         """
         envs = self.config["environments"]
         if env_name:
-            # Filter to just the specified environment
             envs = [e for e in envs if e["name"] == env_name]
 
         if not envs:
-            logging.warning(f"[Noised] No matching environment for env_name={env_name}. Exiting.")
+            logging.warning(f"[Noised Gaussian] No matching environment for env_name={env_name}. Exiting.")
             return
 
-        noise_list = self.config["noise_strategies"]["gaussian"]  # only 'gaussian' for now
+        noise_list = self.config["noise_strategies"].get("gaussian", [])
 
         for env_item in envs:
             name = env_item["name"]
@@ -357,20 +455,20 @@ class NoisedExperiments:
             os.makedirs(noised_path, exist_ok=True)
             os.makedirs(pcmci_path, exist_ok=True)
 
-            logging.info(f"[Noised] Start environment: {name}, obs_dim={obs_dim}")
+            logging.info(f"[Noised Gaussian] Start environment: {name}, obs_dim={obs_dim}")
 
             # For each dimension
             for dim_id in range(obs_dim):
-                # For each noise param
                 obs_dim_name = obs_names[dim_id]
+                # For each noise param
                 for noise_params in noise_list:
                     mean = noise_params.get("mean", 0.0)
                     var = noise_params.get("variance", 0.01)
 
-                    logging.info(f"[Noised] env={name}, dim_id={dim_id}, mean={mean}, var={var}")
+                    logging.info(f"[Noised Gaussian] env={name}, dim_id={dim_id}, mean={mean}, var={var}")
 
-                    # 1) Make environment with noise on dim_id
-                    used_seed = baseline_seed if baseline_seed is not None else random.randint(0, 100)
+                    # 1) Create environment with noise
+                    used_seed = baseline_seed
                     venv = make_noisy_env(
                         env_name=name,
                         dimension_to_noisify=dim_id,
@@ -380,13 +478,13 @@ class NoisedExperiments:
                     )
 
                     # 2) Train from scratch
-                    model = RPPO("MlpPolicy", venv, verbose=0, learning_rate=3e-4)
+                    model = PPO("MlpPolicy", venv, verbose=0, learning_rate=self.learning_rate)
                     callback = RewardTrackingCallback()
                     model.learn(total_timesteps=time_steps, callback=callback)
                     ep_rewards = callback.get_rewards()
                     venv.close()
 
-                    # Store the entire reward curve
+                    # Store entire reward curve
                     for i, rew in enumerate(ep_rewards):
                         self.reward_records.append({
                             "Environment": name,
@@ -397,56 +495,21 @@ class NoisedExperiments:
                             "Reward": rew
                         })
 
-                    # 3) Gather new rollouts with the trained model for PCMCI
-                    test_env = make_noisy_env(
+                    # 3) Multiple PCMCI runs => Fisher
+                    NUM_PCMCI_RUNS = 3
+                    _, _, mk_score = self.run_multiple_pcmci_fisher(
+                        model=model,
                         env_name=name,
-                        dimension_to_noisify=dim_id,
+                        dim_id=dim_id,
                         mean=mean,
                         variance=var,
-                        seed=42
+                        num_runs=NUM_PCMCI_RUNS,
+                        steps=2000
                     )
-                    obs = test_env.reset()
-                    obs_list = []
-                    steps_to_collect = 2000
-                    for _ in range(steps_to_collect):
-                        action, _ = model.predict(obs, deterministic=True)
-                        output = test_env.step(action)
-                        if len(output) == 5:
-                            obs, reward, done, truncated, info = output
-                        else:
-                            obs, reward, done, info = output
-                            truncated = done
-                        obs_list.append(obs[0])  # shape=(1, obs_dim) -> obs[0]
-                        if done[0] or truncated[0]:
-                            obs = test_env.reset()
+                    logging.info(f"[Noised Gaussian] Markov Score => {mk_score:.4f}")
 
-                    test_env.close()
-                    obs_array = np.array(obs_list)
-
-                    # 4) Run PCMCI -> Markov
-                    cit = ConditionalIndependenceTest()
-                    results_dict = cit.run_pcmci(
-                        observations=obs_array,
-                        tau_min=1,
-                        tau_max=2,
-                        alpha_level=0.05,
-                        pc_alpha=None,
-                        env_id=name,
-                        label=f"dim_{dim_id}_var_{var}",
-                        results_dir=pcmci_path  # store .npz in env/noised/pcmci
-                    )
-
-                    val_matrix = results_dict["val_matrix"]
-                    p_matrix = results_dict["p_matrix"]
-                    mk_score = get_markov_violation_score(
-                        p_matrix=p_matrix,
-                        val_matrix=val_matrix,
-                        alpha_level=0.05
-                    )
-                    logging.info(f"[Noised] Markov Score => {mk_score:.4f}")
-
-                    # 5) Store final metrics
-                    final_reward = np.mean(ep_rewards[-10:]) if len(ep_rewards) > 10 else np.mean(ep_rewards)
+                    # 4) Store final metrics
+                    final_reward = np.mean(ep_rewards[-10:]) if len(ep_rewards) >= 10 else np.mean(ep_rewards)
                     self.markov_records.append({
                         "Environment": name,
                         "ObsDim": dim_id,
@@ -456,69 +519,98 @@ class NoisedExperiments:
                         "MeanFinalReward": final_reward
                     })
 
-            # After finishing this environment, write out CSV & produce plots for *just* that env
+            # After finishing this environment, write out CSV & produce plots
             env_rewards = [r for r in self.reward_records if r["Environment"] == name]
             env_markov = [m for m in self.markov_records if m["Environment"] == name]
 
             df_rewards = pd.DataFrame(env_rewards)
             df_markov = pd.DataFrame(env_markov)
 
-            # Save to environment-specific subfolder
+            # Save CSV
             reward_csv = os.path.join(noised_path, "noised_rewards.csv")
             markov_csv = os.path.join(noised_path, "noised_markov.csv")
-
             df_rewards.to_csv(reward_csv, index=False)
             df_markov.to_csv(markov_csv, index=False)
-            logging.info(f"[Noised] Wrote noised rewards to {reward_csv}")
-            logging.info(f"[Noised] Wrote noised Markov to {markov_csv}")
+            logging.info(f"[Noised Gaussian] Wrote noised rewards => {reward_csv}")
+            logging.info(f"[Noised Gaussian] Wrote noised Markov => {markov_csv}")
 
-            # Now produce the new single-figure learning curve for each variance
-            baseline_csv_path = os.path.join(self.root_path, "results", name, "csv", "baseline_learning_curve.csv")
+            # Produce single-figure learning curves for each noise variance
+            baseline_csv_path = os.path.join(env_path, "csv", "baseline_learning_curve.csv")
             plot_noised_learning_curves_all_dims(
                 df_rewards,
                 baseline_csv=baseline_csv_path,
                 output_dir=noised_path,
                 smooth_window=10
             )
-            # The other plots remain as is
+            # Additional plots
             plot_rewards_vs_noise(df_markov, output_dir=noised_path)
             plot_rewards_vs_markov(df_markov, output_dir=noised_path)
             plot_noise_vs_markov_corr(df_markov, output_dir=noised_path)
 
 
-###############################################################################
-# run_noised (for calling from main.py), main() for direct CLI
-###############################################################################
-def run_noised(config_path="config.json", env_name=None, baseline_seed=None):
+def run_noised_gaussian(config_path="config.json", env_name=None, baseline_seed=None):
     """
-    We load config, create a NoisedExperiments, and run for a specific env_name (optional).
-    The results are saved under results/<ENV>/noised, consistent with main.py logic.
+    Reads config, sets up a NoisedGaussianExperiments instance, and runs it
+    for the specified environment. Typically called from main.py or directly.
+
+    config_path : str
+        Path to the config JSON file, which must have:
+         {
+           "noise_strategies": {
+             "gaussian": [ {"mean":0.0, "variance":0.01}, ... ],
+             ...
+           },
+           "environments": [
+             {
+               "name": "CartPole-v1",
+               "time_steps": 30000,
+               "n_envs": 1,
+               "observations": ["CartPos","CartVel","PoleAngle","PoleAngVel"]
+               ...
+             },
+             ...
+           ]
+         }
+    env_name : str
+        If provided, filters to just this environment. Otherwise loops over all.
+    baseline_seed : int or None
+        If you want to reuse a certain seed (for random noise, environment init).
     """
     if not os.path.exists(config_path):
-        logging.error(f"Config file '{config_path}' not found.")
+        logging.error(f"[Noised Gaussian] Config file '{config_path}' not found.")
         return
 
     with open(config_path, "r") as f:
         config = json.load(f)
 
     root_path = os.path.abspath(".")
-    runner = NoisedExperiments(config, root_path=root_path)
+    runner = NoisedGaussianExperiments(config, root_path=root_path)
 
     start_t = time.perf_counter()
     runner.run(env_name=env_name, baseline_seed=baseline_seed)
     end_t = time.perf_counter()
-    logging.info(f"[Noised] Done! Total time: {(end_t - start_t):.2f}s")
+    logging.info(f"[Noised Gaussian] Done! Total time: {((end_t - start_t)/60):.2f}m")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Noised Observations Experiments")
+    """
+    Allows command-line usage, e.g.:
+      python noised_gaussian.py --config_path config.json --env CartPole-v1
+    """
+    parser = argparse.ArgumentParser(description="Noised Observations (Gaussian) Experiments")
     parser.add_argument("--config_path", type=str, default="config.json",
                         help="Path to the config JSON file.")
     parser.add_argument("--env", type=str, default=None,
-                        help="Name of the environment to use from config.json.")
+                        help="Environment name to use from config.json.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Optional baseline seed to reuse.")
     args = parser.parse_args()
 
-    run_noised(config_path=args.config_path, env_name=args.env)
+    run_noised_gaussian(
+        config_path=args.config_path,
+        env_name=args.env,
+        baseline_seed=args.seed
+    )
 
 
 if __name__ == "__main__":
