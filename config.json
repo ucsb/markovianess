@@ -2,7 +2,7 @@
   "environments": [
     {
       "name": "CartPole-v1",
-      "time_steps": 50000,
+      "time_steps": 100000,
       "n_envs": 1,
       "observations": [
         "var_cart_position",
@@ -10,6 +10,8 @@
         "var_pole_angle",
         "var_pole_angular_velocity"
       ],
+      "samples_for_fit": 10000,
+      "epochs_for_fit": 20,
       "pcmci": {
         "tau_max": 5,
         "tau_min": 1,
@@ -23,13 +25,15 @@
     },
     {
       "name": "Pendulum-v1",
-      "time_steps": 250000,
+      "time_steps": 1000000,
       "n_envs": 1,
       "observations": [
         "var_cos(theta)",
         "var_sin(theta)",
         "var_angular_velocity"
       ],
+      "samples_for_fit": 10000,
+      "epochs_for_fit": 20,
       "pcmci": {
         "tau_max": 5,
         "tau_min": 1,
@@ -43,7 +47,7 @@
     },
     {
       "name": "Acrobot-v1",
-      "time_steps": 50000,
+      "time_steps": 100000,
       "n_envs": 1,
       "observations": [
         "var_cos(theta1)",
@@ -53,6 +57,8 @@
         "var_angular_velocity1",
         "var_angular_velocity2"
       ],
+      "samples_for_fit": 10000,
+      "epochs_for_fit": 20,
       "pcmci": {
         "tau_max": 5,
         "tau_min": 1,
@@ -67,71 +73,58 @@
   ],
   "noise_strategies": {
     "gaussian": [
-      { "mean": 0, "variance": 0.10 },
-      { "mean": 0, "variance": 0.80 },
+      { "mean": 0, "variance": 0.01 },
+      { "mean": 0, "variance": 0.02 },
+      { "mean": 0, "variance": 0.05 },
+      { "mean": 0, "variance": 0.08 },
       { "mean": 0, "variance": 1.00 },
       { "mean": 0, "variance": 2.00 },
-      { "mean": 0, "variance": 3.00 },
-      { "mean": 0, "variance": 5.00 },
+      { "mean": 0, "variance": 4.00 },
+      { "mean": 0, "variance": 6.00 },
       { "mean": 0, "variance": 8.00 },
       { "mean": 0, "variance": 10.00 },
-      { "mean": 0, "variance": 12.00 },
-      { "mean": 0, "variance": 15.00 }
+      { "mean": 0, "variance": 20.00 }
     ],
-    "auto_regressive": [
-      {
-        "type": "ar1",
-        "phi": 0.4,
-        "variance": 0.1,
-        "description": "AR(1) noise with phi=0.4, base variance=0.10"
-      },
-      {
-        "type": "ar1",
-        "phi": 0.4,
-        "variance": 0.5,
-        "description": "AR(1) noise with phi=0.4, base variance=0.20"
-      },
-      {
-        "type": "ar1",
-        "phi": 0.4,
-        "variance": 1.0,
-        "description": "AR(1) noise with phi=0.4, base variance=0.30"
-      },
-      {
-        "type": "ar1",
-        "phi": 0.4,
-        "variance": 3.0,
-        "description": "AR(1) noise with phi=0.4, base variance=0.40"
-      },
-      {
-        "type": "ar1",
-        "phi": 0.4,
-        "variance": 5.0,
-        "description": "AR(1) noise with phi=0.4, base variance=0.50"
-      }
+    "action_gaussian": [
+      { "mean": 0, "variance": 0.01 },
+      { "mean": 0, "variance": 0.02 },
+      { "mean": 0, "variance": 0.05 },
+      { "mean": 0, "variance": 0.08 },
+      { "mean": 0, "variance": 1.00 },
+      { "mean": 0, "variance": 2.00 },
+      { "mean": 0, "variance": 4.00 },
+      { "mean": 0, "variance": 6.00 },
+      { "mean": 0, "variance": 8.00 },
+      { "mean": 0, "variance": 10.00 },
+      { "mean": 0, "variance": 20.00 }
     ],
-    "cyclical": [
-      {
-        "type": "cyclical",
-        "base_variance": 0.10,
-        "amplitude": 0.5,
-        "frequency": 0.005,
-        "description": "Sinusoidal modulation of noise variance around 0.10, amplitude=0.5, freq=0.005"
-      },
-      {
-        "type": "cyclical",
-        "base_variance": 0.50,
-        "amplitude": 1.0,
-        "frequency": 0.01,
-        "description": "Stronger sinusoidal modulation with base variance=0.50, amplitude=1.0, freq=0.01"
-      },
-      {
-        "type": "cyclical",
-        "base_variance": 0.50,
-        "amplitude": 1.0,
-        "frequency": 0.05,
-        "description": "Stronger sinusoidal modulation with base variance=0.50, amplitude=1.0, freq=0.01"
-      }
-    ]
+    "auto_regressive": {
+      "ar2": [
+        {
+          "type": "ar1",
+          "alphas": [0.1],
+          "sigma": 0.1,
+          "description": "AR2(0.1,sigma=0.1)"
+        },
+        {
+          "type": "ar1",
+          "alphas": [0.3],
+          "sigma": 0.1,
+          "description": "AR2(0.3,sigma=0.1)"
+        },
+        {
+          "type": "ar1",
+          "alphas": [0.5],
+          "sigma": 0.1,
+          "description": "AR2(0.5,sigma=0.1)"
+        },
+        {
+          "type": "ar1",
+          "alphas": [0.9],
+          "sigma": 0.1,
+          "description": "AR2(0.9,sigma=0.1)"
+        }
+      ]
+    }
   }
 }
