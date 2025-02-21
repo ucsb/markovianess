@@ -1,0 +1,30 @@
+---
+- name: Download results from remote server
+  hosts: host
+  gather_facts: no
+
+  vars:
+    remote_results_path: "/home/ubuntu/reinforcement_learning/results"
+    local_results_dir: "results"
+
+  tasks:
+    - name: Ensure local results directory exists
+      ansible.builtin.file:
+        path: "{{ local_results_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Synchronize entire results directory to local
+      ansible.posix.synchronize:
+        src: "{{ remote_results_path }}/"
+        dest: "{{ local_results_dir }}/"
+        mode: pull
+        archive: yes
+        recursive: yes
+        rsync_opts:
+          - "--rsh='ssh -i <> -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'"
+      delegate_to: localhost
+
+    - name: Print a message
+      ansible.builtin.debug:
+        msg: "Downloaded all results from {{ remote_results_path }} to {{ local_results_dir }}"

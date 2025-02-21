@@ -1,0 +1,30 @@
+---
+- name: Setup and run the benchmark
+  hosts: host
+  vars:
+    ssh_key_path: ""
+    ssh_key_pub_path: ""
+  tasks:
+    # Step 0: Install basic ubuntu stuff
+    - name: Install basic stuff
+      ansible.builtin.shell:
+        cmd: >
+          sudo apt update
+      args:
+        executable: /bin/bash
+    # Step 1: Install python
+    - name: Install python virtual environment stuff
+      ansible.builtin.shell:
+        cmd: >
+          sudo apt install python3.12-venv -y
+      args:
+        executable: /bin/bash
+    # Step 2: Install unzip
+    - name: Install unzip
+      ansible.builtin.shell:
+        cmd: >
+          sudo apt-get install unzip
+      args:
+        executable: /bin/bash
+
+
