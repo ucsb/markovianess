@@ -81,33 +81,34 @@ def run_all_experiments_for_env(env_name, config_path, start_time):
     print(f"\n===== RUNNING BASELINE FOR ENV={env_name} =====")
     used_seed = run_baseline(config_path=config_path, env_name=env_name)
     baseline_end_time = time.perf_counter()
+    print(f"Seed used: {used_seed}")
     print(f"Baseline time for {env_name}: {baseline_end_time - start_time:.2f} s")
 
-    print(f"===== RUNNING NOISED GAUSSIAN ACTION FOR ENV={env_name} =====")
-    run_noised_gaussian_action(config_path=config_path, env_name=env_name, baseline_seed=used_seed)
-    gauss_action_end_time = time.perf_counter()
-    print(f"Noised (Gaussian) action time for {env_name}: {gauss_action_end_time - baseline_end_time:.2f} s")
+    #print(f"===== RUNNING NOISED GAUSSIAN ACTION FOR ENV={env_name} =====")
+    #run_noised_gaussian_action(config_path=config_path, env_name=env_name, baseline_seed=used_seed)
+    #gauss_action_end_time = time.perf_counter()
+    #print(f"Noised (Gaussian) action time for {env_name}: {gauss_action_end_time - baseline_end_time:.2f} s")
 
     print(f"===== RUNNING NOISED GAUSSIAN FOR ENV={env_name} =====")
     run_noised_gaussian(config_path=config_path, env_name=env_name, baseline_seed=used_seed)
     gauss_end_time = time.perf_counter()
-    print(f"Noised (Gaussian) time for {env_name}: {gauss_end_time - gauss_action_end_time:.2f} s")
+    print(f"Noised (Gaussian) time for {env_name}: {gauss_end_time - baseline_end_time:.2f} s")
 
     print(f"===== RUNNING AR NOISED FOR ENV={env_name} =====")
     run_noised_auto_regressive(config_path, env_name=env_name, baseline_seed=used_seed)
     ar_end_time = time.perf_counter()
     print(f"AR Noised time for {env_name}: {ar_end_time - gauss_end_time:.2f} s")
 
-    print(f"===== RUNNING NOISED ACTION AR FOR ENV={env_name} =====")
-    run_noised_action_auto_regressive(config_path, env_name=env_name, baseline_seed=used_seed)
-    ar_action_end_time = time.perf_counter()
-    print(f"AR Noised Action time for {env_name}: {ar_action_end_time - ar_end_time:.2f} s")
+    #print(f"===== RUNNING NOISED ACTION AR FOR ENV={env_name} =====")
+    #run_noised_action_auto_regressive(config_path, env_name=env_name, baseline_seed=used_seed)
+    #ar_action_end_time = time.perf_counter()
+    #print(f"AR Noised Action time for {env_name}: {ar_action_end_time - ar_end_time:.2f} s")
 
     # If you also want dimension-dropping experiments, keep the line below:
     print(f"===== RUNNING DROPPED FOR ENV={env_name} =====")
     run_dropped(config_path, env_name, baseline_seed=used_seed)
     dropped_end_time = time.perf_counter()
-    print(f"Dropped time for {env_name}: {dropped_end_time - ar_action_end_time:.2f} s")
+    print(f"Dropped time for {env_name}: {dropped_end_time - ar_end_time:.2f} s")
 
 
 def main(root_path: pathlib.Path, env_name=None):
