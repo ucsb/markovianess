@@ -3,7 +3,7 @@
     {
       "name": "CartPole-v1",
       "time_steps": 100000,
-      "n_envs": 1,
+      "n_envs": 8,
       "observations": [
         "var_cart_position",
         "var_cart_velocity",
@@ -26,7 +26,7 @@
     {
       "name": "Pendulum-v1",
       "time_steps": 1000000,
-      "n_envs": 1,
+      "n_envs": 8,
       "observations": [
         "var_cos(theta)",
         "var_sin(theta)",
@@ -48,7 +48,7 @@
     {
       "name": "Acrobot-v1",
       "time_steps": 100000,
-      "n_envs": 1,
+      "n_envs": 8,
       "observations": [
         "var_cos(theta1)",
         "var_sin(theta1)",
